@@ -10,12 +10,20 @@ export const register = async (req, res) => {
     const { name, email, password } = req.body;
 
     if (!name || !email || !password) {
-      return res.status(400).json({ message: 'Усі поля є обов’язковими' });
+      return res.status(400)
+        .json({ message: 'Усі поля є обов’язковими' });
+    }
+
+    // Валідація складності пароля
+    if (password.length < 6) {
+      return res.status(400).json({
+        message: 'Пароль повинен містити щонайменше 6 символів',
+      });
     }
 
     const candidateResult = await pool.query(
       'SELECT * FROM users WHERE email = $1;',
-      [email],
+      [email]
     );
 
     if (candidateResult.rows.length > 0) {
@@ -31,14 +39,15 @@ export const register = async (req, res) => {
       `INSERT INTO users (name, email, password, activation_token)
        VALUES ($1, $2, $3, $4)
        RETURNING id, name, email, is_activated;`,
-      [name, email, hashedPassword, activationToken],
+      [name, email, hashedPassword, activationToken]
     );
 
     const user = newUserResult.rows[0];
 
-    await mailService.sendActivationMail(
+    // Виправлена назва функції: sendActivationEmail
+    await mailService.sendActivationEmail(
       email,
-      `${process.env.CLIENT_URL}/api/activate/${activationToken}`,
+      `${process.env.CLIENT_URL}/api/activate/${activationToken}`
     );
 
     return res.status(201).json({
@@ -46,7 +55,8 @@ export const register = async (req, res) => {
       user,
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Помилка сервера при реєстрації' });
+    return res.status(500)
+      .json({ message: 'Помилка сервера при реєстрації' });
   }
 };
 
@@ -56,23 +66,26 @@ export const activate = async (req, res) => {
 
     const userResult = await pool.query(
       'SELECT * FROM users WHERE activation_token = $1;',
-      [activationToken],
+      [activationToken]
     );
 
     if (userResult.rows.length === 0) {
-      return res.status(400).json({ message: 'Невалідний токен активації' });
+      return res
+        .status(400)
+        .json({ message: 'Невалідний токен активації' });
     }
 
     await pool.query(
       `UPDATE users
        SET is_activated = TRUE, activation_token = NULL
        WHERE activation_token = $1;`,
-      [activationToken],
+      [activationToken]
     );
 
     return res.json({ message: 'Акаунт успішно активовано' });
   } catch (error) {
-    return res.status(500).json({ message: 'Помилка сервера при активації' });
+    return res.status(500)
+      .json({ message: 'Помилка сервера при активації' });
   }
 };
 
@@ -82,31 +95,43 @@ export const login = async (req, res) => {
 
     const userResult = await pool.query(
       'SELECT * FROM users WHERE email = $1;',
-      [email],
+      [email]
     );
 
     if (userResult.rows.length === 0) {
-      return res.status(400).json({ message: 'Користувача не знайдено' });
+      return res.status(400)
+        .json({ message: 'Користувача не знайдено' });
     }
 
     const user = userResult.rows[0];
 
-    const isPassEquals = await bcrypt.compare(password, user.password);
+    // Перевірка активації акаунта
+    if (!user.is_activated) {
+      return res.status(400).json({
+        message: 'Будь ласка, активуйте свій акаунт через лист на пошті',
+      });
+    }
+
+    const isPassEquals = await bcrypt.compare(
+      password,
+      user.password
+    );
 
     if (!isPassEquals) {
-      return res.status(400).json({ message: 'Невірний пароль' });
+      return res.status(400)
+        .json({ message: 'Невірний пароль' });
     }
 
     const accessToken = jwt.sign(
       { id: user.id, email: user.email },
       process.env.JWT_ACCESS_SECRET,
-      { expiresIn: '30m' },
+      { expiresIn: '30m' }
     );
 
     const refreshToken = jwt.sign(
       { id: user.id, email: user.email },
       process.env.JWT_REFRESH_SECRET,
-      { expiresIn: '30d' },
+      { expiresIn: '30d' }
     );
 
     await tokenService.saveToken(user.id, refreshToken);
@@ -121,7 +146,8 @@ export const login = async (req, res) => {
       user: { id: user.id, name: user.name, email: user.email },
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Помилка сервера при вході' });
+    return res.status(500)
+      .json({ message: 'Помилка сервера при вході' });
   }
 };
 
@@ -137,7 +163,8 @@ export const logout = async (req, res) => {
 
     return res.json({ message: 'Вихід успішний' });
   } catch (error) {
-    return res.status(500).json({ message: 'Помилка сервера при виході' });
+    return res.status(500)
+      .json({ message: 'Помилка сервера при виході' });
   }
 };
 
@@ -147,23 +174,25 @@ export const forgotPassword = async (req, res) => {
 
     const userResult = await pool.query(
       'SELECT * FROM users WHERE email = $1;',
-      [email],
+      [email]
     );
 
     if (userResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Користувача не знайдено' });
+      return res.status(404)
+        .json({ message: 'Користувача не знайдено' });
     }
 
     const resetToken = uuidv4();
 
-    await pool.query('UPDATE users SET reset_token = $1 WHERE email = $2;', [
-      resetToken,
-      email,
-    ]);
+    await pool.query(
+      'UPDATE users SET reset_token = $1 WHERE email = $2;',
+      [resetToken, email]
+    );
 
-    await mailService.sendActivationMail(
+    // Виправлена назва функції: sendPasswordResetEmail
+    await mailService.sendPasswordResetEmail(
       email,
-      `${process.env.CLIENT_URL}/reset-password/${resetToken}`,
+      `${process.env.CLIENT_URL}/reset-password/${resetToken}`
     );
 
     return res.json({
@@ -178,11 +207,23 @@ export const forgotPassword = async (req, res) => {
 
 export const resetPassword = async (req, res) => {
   try {
-    const { resetToken, newPassword } = req.body;
+    const { resetToken, newPassword, confirmPassword } = req.body;
+
+    if (newPassword && confirmPassword && newPassword !== confirmPassword) {
+      return res
+        .status(400)
+        .json({ message: 'Паролі не збігаються' });
+    }
+
+    if (newPassword && newPassword.length < 6) {
+      return res.status(400).json({
+        message: 'Пароль повинен містити щонайменше 6 символів',
+      });
+    }
 
     const userResult = await pool.query(
       'SELECT * FROM users WHERE reset_token = $1;',
-      [resetToken],
+      [resetToken]
     );
 
     if (userResult.rows.length === 0) {
@@ -197,7 +238,7 @@ export const resetPassword = async (req, res) => {
       `UPDATE users
        SET password = $1, reset_token = NULL
        WHERE reset_token = $2;`,
-      [hashedPassword, resetToken],
+      [hashedPassword, resetToken]
     );
 
     return res.json({ message: 'Пароль успішно змінено' });
@@ -218,7 +259,7 @@ export const updateProfileName = async (req, res) => {
        SET name = $1, updated_at = CURRENT_TIMESTAMP
        WHERE id = $2
        RETURNING id, name, email;`,
-      [name, userId],
+      [name, userId]
     );
 
     return res.json(updatedUserResult.rows[0]);
@@ -231,19 +272,36 @@ export const updateProfileName = async (req, res) => {
 
 export const updatePassword = async (req, res) => {
   try {
-    const { oldPassword, newPassword } = req.body;
+    const { oldPassword, newPassword, confirmPassword } = req.body;
     const userId = req.user.id;
 
-    const userResult = await pool.query('SELECT * FROM users WHERE id = $1;', [
-      userId,
-    ]);
+    if (newPassword && confirmPassword && newPassword !== confirmPassword) {
+      return res
+        .status(400)
+        .json({ message: 'Нові паролі не збігаються' });
+    }
+
+    if (newPassword && newPassword.length < 6) {
+      return res.status(400).json({
+        message: 'Пароль повинен містити щонайменше 6 символів',
+      });
+    }
+
+    const userResult = await pool.query(
+      'SELECT * FROM users WHERE id = $1;',
+      [userId]
+    );
 
     const user = userResult.rows[0];
 
-    const isPassEquals = await bcrypt.compare(oldPassword, user.password);
+    const isPassEquals = await bcrypt.compare(
+      oldPassword,
+      user.password
+    );
 
     if (!isPassEquals) {
-      return res.status(400).json({ message: 'Невірний старий пароль' });
+      return res.status(400)
+        .json({ message: 'Невірний старий пароль' });
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
@@ -252,7 +310,7 @@ export const updatePassword = async (req, res) => {
       `UPDATE users
        SET password = $1, updated_at = CURRENT_TIMESTAMP
        WHERE id = $2;`,
-      [hashedPassword, userId],
+      [hashedPassword, userId]
     );
 
     return res.json({ message: 'Пароль успішно оновлено' });
@@ -275,12 +333,13 @@ export const updateEmail = async (req, res) => {
        SET email = $1, is_activated = FALSE,
            activation_token = $2, updated_at = CURRENT_TIMESTAMP
        WHERE id = $3;`,
-      [email, activationToken, userId],
+      [email, activationToken, userId]
     );
 
-    await mailService.sendActivationMail(
+    // Виправлена назва функції: sendActivationEmail
+    await mailService.sendActivationEmail(
       email,
-      `${process.env.CLIENT_URL}/api/activate/${activationToken}`,
+      `${process.env.CLIENT_URL}/api/activate/${activationToken}`
     );
 
     return res.json({
