@@ -5,6 +5,17 @@ import { pool } from '../db.js';
 import * as mailService from '../services/mail.service.js';
 import * as tokenService from '../services/token.service.js';
 
+// Допоміжна функція для валідації пароля
+const validatePassword = (password) => {
+  if (password.length < 6) {
+    return 'Пароль повинен містити щонайменше 6 символів';
+  }
+  if (!/\d/.test(password) || !/[a-zA-Z]/.test(password)) {
+    return 'Пароль повинен містити хоча б одну літеру та одну цифру';
+  }
+  return null;
+};
+
 export const register = async (req, res) => {
   try {
     const { name, email, password } = req.body;
@@ -14,11 +25,9 @@ export const register = async (req, res) => {
         .json({ message: 'Усі поля є обов’язковими' });
     }
 
-    // Валідація складності пароля
-    if (password.length < 6) {
-      return res.status(400).json({
-        message: 'Пароль повинен містити щонайменше 6 символів',
-      });
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      return res.status(400).json({ message: passwordError });
     }
 
     const candidateResult = await pool.query(
@@ -44,7 +53,6 @@ export const register = async (req, res) => {
 
     const user = newUserResult.rows[0];
 
-    // Виправлена назва функції: sendActivationEmail
     await mailService.sendActivationEmail(
       email,
       `${process.env.CLIENT_URL}/api/activate/${activationToken}`
@@ -105,7 +113,6 @@ export const login = async (req, res) => {
 
     const user = userResult.rows[0];
 
-    // Перевірка активації акаунта
     if (!user.is_activated) {
       return res.status(400).json({
         message: 'Будь ласка, активуйте свій акаунт через лист на пошті',
@@ -189,7 +196,6 @@ export const forgotPassword = async (req, res) => {
       [resetToken, email]
     );
 
-    // Виправлена назва функції: sendPasswordResetEmail
     await mailService.sendPasswordResetEmail(
       email,
       `${process.env.CLIENT_URL}/reset-password/${resetToken}`
@@ -215,10 +221,9 @@ export const resetPassword = async (req, res) => {
         .json({ message: 'Паролі не збігаються' });
     }
 
-    if (newPassword && newPassword.length < 6) {
-      return res.status(400).json({
-        message: 'Пароль повинен містити щонайменше 6 символів',
-      });
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) {
+      return res.status(400).json({ message: passwordError });
     }
 
     const userResult = await pool.query(
@@ -281,10 +286,9 @@ export const updatePassword = async (req, res) => {
         .json({ message: 'Нові паролі не збігаються' });
     }
 
-    if (newPassword && newPassword.length < 6) {
-      return res.status(400).json({
-        message: 'Пароль повинен містити щонайменше 6 символів',
-      });
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) {
+      return res.status(400).json({ message: passwordError });
     }
 
     const userResult = await pool.query(
@@ -323,11 +327,36 @@ export const updatePassword = async (req, res) => {
 
 export const updateEmail = async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, password } = req.body;
     const userId = req.user.id;
 
+    if (!email || !password) {
+      return res.status(400).json({
+        message: 'Вкажіть новий email та поточний пароль',
+      });
+    }
+
+    const userResult = await pool.query(
+      'SELECT * FROM users WHERE id = $1;',
+      [userId]
+    );
+
+    const user = userResult.rows[0];
+
+    // 1. Перевіряємо поточний пароль користувача
+    const isPassEquals = await bcrypt.compare(
+      password,
+      user.password
+    );
+
+    if (!isPassEquals) {
+      return res.status(400).json({ message: 'Невірний пароль' });
+    }
+
+    const oldEmail = user.email;
     const activationToken = uuidv4();
 
+    // 2. Оновлюємо email та статус активації
     await pool.query(
       `UPDATE users
        SET email = $1, is_activated = FALSE,
@@ -336,11 +365,14 @@ export const updateEmail = async (req, res) => {
       [email, activationToken, userId]
     );
 
-    // Виправлена назва функції: sendActivationEmail
+    // 3. Надсилаємо лист з посиланням на активацію на НОВИЙ email
     await mailService.sendActivationEmail(
       email,
       `${process.env.CLIENT_URL}/api/activate/${activationToken}`
     );
+
+    // 4. Сповіщаємо СТАРИЙ email про зміну адреси
+    await mailService.sendEmailChangeNotification(oldEmail, email);
 
     return res.json({
       message: 'Email оновлено. Перевірте нову пошту для активації.',
